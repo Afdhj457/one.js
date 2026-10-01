@@ -1,577 +1,715 @@
 /**
  * one.js - 一个极简的 DOM 操作库
- * 版本: 1.0.0
- * 特点: 链式调用、轻量级、无依赖
+ * 版本: 2.0.0
+ * 特点: 链式调用、轻量级、无依赖、性能优化
  */
 
 (function (global) {
   'use strict';
 
-  // 核心构造函数
+  // ==================== 工具函数 ====================
+  const isString = (v) => typeof v === 'string';
+  const isFunction = (v) => typeof v === 'function';
+  const isNode = (v) => v instanceof Node;
+  const isArrayLike = (v) => v != null && typeof v === 'object' && typeof v.length === 'number' && !isFunction(v);
+  const isPlainObject = (v) => v != null && typeof v === 'object' && (v.constructor === Object || v.constructor === undefined);
+
+  // 缓存 document 引用，避免重复查找
+  const doc = global.document;
+
+  // 事件监听器存储（使用 WeakMap 避免内存泄漏）
+  const eventStore = new WeakMap();
+
+  // 预编译正则，避免重复创建
+  const RE_HTML = /^\s*<[\s\S]*>\s*$/;
+  const RE_WHITESPACE = /\s+/;
+
+  // ==================== 核心构造函数 ====================
   function One(selector, context) {
-    // 如果直接调用 One()，返回一个空实例
-    if (!(this instanceof One)) {
-      return new One(selector, context);
-    }
+    if (!(this instanceof One)) return new One(selector, context);
 
-    // 存储匹配到的元素
     this.elements = [];
+    this.length = 0;
 
-    // 处理不同参数类型
-    if (selector) {
-      if (typeof selector === 'string') {
-        // 字符串选择器：支持 CSS 选择器和 HTML 片段
-        const trimmed = selector.trim();
-        if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
-          // HTML 片段：创建元素
-          const temp = document.createElement('div');
-          temp.innerHTML = trimmed;
-          this.elements = Array.from(temp.children);
-        } else {
-          // CSS 选择器
-          const ctx = context ? (context.elements ? context.elements[0] : context) : document;
-          this.elements = Array.from(ctx.querySelectorAll(trimmed));
-        }
-      } else if (selector instanceof One) {
-        // 传入 One 实例：复制元素
-        this.elements = selector.elements.slice();
-      } else if (selector instanceof Node) {
-        // 单个 DOM 节点
-        this.elements = [selector];
-      } else if (selector instanceof NodeList || Array.isArray(selector)) {
-        // NodeList 或数组
-        this.elements = Array.from(selector);
-      } else if (typeof selector === 'function') {
-        // 文档就绪回调
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', selector);
-        } else {
-          selector();
-        }
-        this.elements = [];
-      }
+    if (selector == null) return this;
+
+    // 函数：文档就绪
+    if (isFunction(selector)) {
+      One.ready(selector);
+      return this;
     }
+
+    // 字符串
+    if (isString(selector)) {
+      const trimmed = selector.trim();
+      if (!trimmed) return this;
+
+      // HTML 片段
+      if (RE_HTML.test(trimmed)) {
+        const temp = doc.createElement('div');
+        temp.innerHTML = trimmed;
+        this._setElements(temp.children);
+        return this;
+      }
+
+      // CSS 选择器
+      const ctx = context
+        ? (context instanceof One ? context.elements[0] : (isNode(context) ? context : doc))
+        : doc;
+      if (!ctx) return this;
+      this._setElements(ctx.querySelectorAll(trimmed));
+      return this;
+    }
+
+    // One 实例
+    if (selector instanceof One) {
+      this._setElements(selector.elements);
+      return this;
+    }
+
+    // 单个节点
+    if (isNode(selector)) {
+      this.elements = [selector];
+      this.length = 1;
+      return this;
+    }
+
+    // NodeList / HTMLCollection / 数组
+    if (isArrayLike(selector)) {
+      this._setElements(selector);
+      return this;
+    }
+
+    return this;
   }
 
-  // 原型方法
-  One.prototype = {
-    constructor: One,
+  // ==================== 原型方法 ====================
+  const proto = One.prototype;
 
-    // 获取指定索引的元素
-    get: function (index) {
-      if (index === undefined) {
-        return this.elements;
-      }
-      return this.elements[index] || null;
-    },
-
-    // 获取第一个元素（原生 DOM）
-    first: function () {
-      return this.elements[0] || null;
-    },
-
-    // 获取最后一个元素（原生 DOM）
-    last: function () {
-      return this.elements[this.elements.length - 1] || null;
-    },
-
-    // 遍历元素
-    each: function (callback) {
-      this.elements.forEach(function (el, i) {
-        callback.call(el, i, el);
-      });
-      return this;
-    },
-
-    // 添加类名
-    addClass: function (className) {
-      if (!className) return this;
-      const classes = className.split(/\s+/);
-      return this.each(function () {
-        classes.forEach(function (cls) {
-          if (cls) this.classList.add(cls);
-        }, this);
-      });
-    },
-
-    // 移除类名
-    removeClass: function (className) {
-      if (!className) {
-        // 不传参数时移除所有类名
-        return this.each(function () {
-          this.className = '';
-        });
-      }
-      const classes = className.split(/\s+/);
-      return this.each(function () {
-        classes.forEach(function (cls) {
-          if (cls) this.classList.remove(cls);
-        }, this);
-      });
-    },
-
-    // 切换类名
-    toggleClass: function (className) {
-      if (!className) return this;
-      const classes = className.split(/\s+/);
-      return this.each(function () {
-        classes.forEach(function (cls) {
-          if (cls) this.classList.toggle(cls);
-        }, this);
-      });
-    },
-
-    // 判断是否包含某个类名
-    hasClass: function (className) {
-      if (!className) return false;
-      const classes = className.split(/\s+/);
-      return this.elements.some(function (el) {
-        return classes.every(function (cls) {
-          return el.classList.contains(cls);
-        });
-      });
-    },
-
-    // 设置或获取属性
-    attr: function (name, value) {
-      if (typeof name === 'object') {
-        // 批量设置属性
-        const attrs = name;
-        return this.each(function () {
-          for (const key in attrs) {
-            if (attrs.hasOwnProperty(key)) {
-              this.setAttribute(key, attrs[key]);
-            }
-          }
-        });
-      }
-      if (value === undefined) {
-        // 获取属性
-        return this.elements[0] ? this.elements[0].getAttribute(name) : undefined;
-      }
-      // 设置属性
-      return this.each(function () {
-        this.setAttribute(name, value);
-      });
-    },
-
-    // 移除属性
-    removeAttr: function (name) {
-      return this.each(function () {
-        this.removeAttribute(name);
-      });
-    },
-
-    // 设置或获取样式
-    css: function (prop, value) {
-      if (typeof prop === 'object') {
-        // 批量设置样式
-        const styles = prop;
-        return this.each(function () {
-          for (const key in styles) {
-            if (styles.hasOwnProperty(key)) {
-              this.style[key] = styles[key];
-            }
-          }
-        });
-      }
-      if (value === undefined) {
-        // 获取样式（计算后的样式）
-        if (!this.elements[0]) return undefined;
-        const computed = window.getComputedStyle(this.elements[0]);
-        return computed[prop] || this.elements[0].style[prop];
-      }
-      // 设置单个样式
-      return this.each(function () {
-        this.style[prop] = value;
-      });
-    },
-
-    // 设置或获取文本内容
-    text: function (content) {
-      if (content === undefined) {
-        return this.elements.map(function (el) {
-          return el.textContent;
-        }).join('');
-      }
-      return this.each(function () {
-        this.textContent = content;
-      });
-    },
-
-    // 设置或获取 HTML 内容
-    html: function (content) {
-      if (content === undefined) {
-        return this.elements[0] ? this.elements[0].innerHTML : undefined;
-      }
-      return this.each(function () {
-        this.innerHTML = content;
-      });
-    },
-
-    // 设置或获取表单值
-    val: function (value) {
-      if (value === undefined) {
-        return this.elements[0] ? this.elements[0].value : undefined;
-      }
-      return this.each(function () {
-        this.value = value;
-      });
-    },
-
-    // 隐藏元素
-    hide: function () {
-      return this.each(function () {
-        this.style.display = 'none';
-      });
-    },
-
-    // 显示元素（恢复默认显示方式）
-    show: function () {
-      return this.each(function () {
-        if (this.style.display === 'none') {
-          this.style.display = '';
-        }
-      });
-    },
-
-    // 在内部末尾追加内容
-    append: function (content) {
-      return this._insertContent(content, 'beforeend');
-    },
-
-    // 在内部开头插入内容
-    prepend: function (content) {
-      return this._insertContent(content, 'afterbegin');
-    },
-
-    // 在外部之前插入内容
-    before: function (content) {
-      return this._insertContent(content, 'beforebegin');
-    },
-
-    // 在外部之后插入内容
-    after: function (content) {
-      return this._insertContent(content, 'afterend');
-    },
-
-    // 内部辅助方法：插入内容
-    _insertContent: function (content, position) {
-      const self = this;
-      const nodes = self._parseContent(content);
-      if (nodes.length === 0) return this;
-
-      return this.each(function () {
-        const target = this;
-        nodes.forEach(function (node) {
-          const clone = node.cloneNode(true);
-          target.insertAdjacentElement(position, clone);
-        });
-      });
-    },
-
-    // 解析内容为节点数组
-    _parseContent: function (content) {
-      if (!content) return [];
-      if (content instanceof One) {
-        return content.elements;
-      }
-      if (content instanceof Node) {
-        return [content];
-      }
-      if (typeof content === 'string') {
-        const temp = document.createElement('div');
-        temp.innerHTML = content.trim();
-        return Array.from(temp.childNodes);
-      }
-      if (Array.isArray(content) || content instanceof NodeList) {
-        return Array.from(content);
-      }
-      return [];
-    },
-
-    // 移除元素
-    remove: function () {
-      return this.each(function () {
-        if (this.parentNode) {
-          this.parentNode.removeChild(this);
-        }
-      });
-    },
-
-    // 清空元素内容
-    empty: function () {
-      return this.each(function () {
-        this.innerHTML = '';
-      });
-    },
-
-    // 绑定事件
-    on: function (event, selector, handler) {
-      // 处理参数：on(event, handler) 或 on(event, selector, handler)
-      if (typeof selector === 'function') {
-        handler = selector;
-        selector = null;
-      }
-
-      return this.each(function () {
-        const element = this;
-        const listener = function (e) {
-          if (selector) {
-            // 事件委托
-            const target = e.target.closest(selector);
-            if (target && element.contains(target)) {
-              handler.call(target, e);
-            }
-          } else {
-            handler.call(element, e);
-          }
-        };
-        element.addEventListener(event, listener);
-
-        // 存储监听器以便解绑
-        if (!element._oneEvents) {
-          element._oneEvents = {};
-        }
-        if (!element._oneEvents[event]) {
-          element._oneEvents[event] = [];
-        }
-        element._oneEvents[event].push({ listener: listener, handler: handler, selector: selector });
-      });
-    },
-
-    // 解绑事件
-    off: function (event, handler) {
-      return this.each(function () {
-        if (!this._oneEvents || !this._oneEvents[event]) return;
-
-        this._oneEvents[event] = this._oneEvents[event].filter(function (item) {
-          if (handler && item.handler !== handler) {
-            return true;
-          }
-          this.removeEventListener(event, item.listener);
-          return false;
-        }, this);
-      });
-    },
-
-    // 触发事件
-    trigger: function (event) {
-      return this.each(function () {
-        const evt = new CustomEvent(event, { bubbles: true, cancelable: true });
-        this.dispatchEvent(evt);
-      });
-    },
-
-    // 查找后代元素
-    find: function (selector) {
-      const result = new One();
-      result.elements = [];
-      this.each(function () {
-        const found = this.querySelectorAll(selector);
-        result.elements = result.elements.concat(Array.from(found));
-      });
-      return result;
-    },
-
-    // 获取父元素
-    parent: function () {
-      const result = new One();
-      result.elements = [];
-      this.each(function () {
-        if (this.parentNode && result.elements.indexOf(this.parentNode) === -1) {
-          result.elements.push(this.parentNode);
-        }
-      });
-      return result;
-    },
-
-    // 获取子元素
-    children: function () {
-      const result = new One();
-      result.elements = [];
-      this.each(function () {
-        const children = Array.from(this.children);
-        result.elements = result.elements.concat(children);
-      });
-      return result;
-    },
-
-    // 获取下一个兄弟元素
-    next: function () {
-      const result = new One();
-      result.elements = [];
-      this.each(function () {
-        let next = this.nextElementSibling;
-        if (next && result.elements.indexOf(next) === -1) {
-          result.elements.push(next);
-        }
-      });
-      return result;
-    },
-
-    // 获取上一个兄弟元素
-    prev: function () {
-      const result = new One();
-      result.elements = [];
-      this.each(function () {
-        let prev = this.previousElementSibling;
-        if (prev && result.elements.indexOf(prev) === -1) {
-          result.elements.push(prev);
-        }
-      });
-      return result;
-    },
-
-    // 筛选元素
-    filter: function (callback) {
-      const result = new One();
-      result.elements = this.elements.filter(function (el, i) {
-        return callback.call(el, i, el);
-      });
-      return result;
-    },
-
-    // 映射元素
-    map: function (callback) {
-      return this.elements.map(function (el, i) {
-        return callback.call(el, i, el);
-      });
-    },
-
-    // 获取元素在集合中的索引
-    index: function (element) {
-      if (element === undefined) {
-        // 返回第一个元素在其父元素中的索引
-        const first = this.elements[0];
-        if (!first) return -1;
-        const parent = first.parentNode;
-        if (!parent) return -1;
-        return Array.from(parent.children).indexOf(first);
-      }
-      if (element instanceof One) {
-        element = element.elements[0];
-      }
-      return this.elements.indexOf(element);
-    },
-
-    // 获取元素数量
-    length: 0, // 在构造函数中动态更新
-
-    // 转换为数组
-    toArray: function () {
-      return this.elements.slice();
-    }
+  // 内部：设置元素集合并更新 length
+  proto._setElements = function (list) {
+    this.elements = Array.prototype.slice.call(list);
+    this.length = this.elements.length;
+    return this;
   };
 
-  // 动态更新 length 属性
-  Object.defineProperty(One.prototype, 'length', {
-    get: function () {
-      return this.elements.length;
-    },
-    configurable: true
-  });
+  // 遍历（带缓存的循环，比 forEach 快）
+  proto.each = function (callback) {
+    const els = this.elements;
+    for (let i = 0, len = els.length; i < len; i++) {
+      callback.call(els[i], i, els[i]);
+    }
+    return this;
+  };
 
-  // 静态方法：文档就绪
+  // 获取元素
+  proto.get = function (index) {
+    if (index === undefined) return this.elements.slice();
+    return this.elements[index < 0 ? this.elements.length + index : index] || null;
+  };
+
+  proto.first = function () {
+    return this.elements[0] || null;
+  };
+
+  proto.last = function () {
+    return this.elements[this.elements.length - 1] || null;
+  };
+
+  proto.eq = function (index) {
+    const el = this.get(index);
+    return el ? new One(el) : new One();
+  };
+
+  proto.toArray = function () {
+    return this.elements.slice();
+  };
+
+  // ==================== 类名操作 ====================
+  proto.addClass = function (className) {
+    if (!className) return this;
+    const classes = className.split(RE_WHITESPACE);
+    return this.each(function () {
+      const cl = this.classList;
+      for (let i = 0, len = classes.length; i < len; i++) {
+        if (classes[i]) cl.add(classes[i]);
+      }
+    });
+  };
+
+  proto.removeClass = function (className) {
+    if (!className) {
+      return this.each(function () {
+        this.className = '';
+      });
+    }
+    const classes = className.split(RE_WHITESPACE);
+    return this.each(function () {
+      const cl = this.classList;
+      for (let i = 0, len = classes.length; i < len; i++) {
+        if (classes[i]) cl.remove(classes[i]);
+      }
+    });
+  };
+
+  proto.toggleClass = function (className, force) {
+    if (!className) return this;
+    const classes = className.split(RE_WHITESPACE);
+    return this.each(function () {
+      const cl = this.classList;
+      for (let i = 0, len = classes.length; i < len; i++) {
+        if (classes[i]) cl.toggle(classes[i], force);
+      }
+    });
+  };
+
+  proto.hasClass = function (className) {
+    if (!className) return false;
+    const classes = className.split(RE_WHITESPACE);
+    const els = this.elements;
+    for (let i = 0, len = els.length; i < len; i++) {
+      const cl = els[i].classList;
+      let all = true;
+      for (let j = 0, clen = classes.length; j < clen; j++) {
+        if (classes[j] && !cl.contains(classes[j])) {
+          all = false;
+          break;
+        }
+      }
+      if (all) return true;
+    }
+    return false;
+  };
+
+  // ==================== 属性操作 ====================
+  proto.attr = function (name, value) {
+    // 批量设置
+    if (isPlainObject(name)) {
+      const attrs = name;
+      return this.each(function () {
+        for (const key in attrs) {
+          if (Object.prototype.hasOwnProperty.call(attrs, key)) {
+            this.setAttribute(key, attrs[key]);
+          }
+        }
+      });
+    }
+    // 获取
+    if (value === undefined) {
+      const el = this.elements[0];
+      return el ? el.getAttribute(name) : undefined;
+    }
+    // 设置
+    return this.each(function () {
+      this.setAttribute(name, value);
+    });
+  };
+
+  proto.removeAttr = function (name) {
+    if (!name) return this;
+    const names = name.split(RE_WHITESPACE);
+    return this.each(function () {
+      for (let i = 0, len = names.length; i < len; i++) {
+        if (names[i]) this.removeAttribute(names[i]);
+      }
+    });
+  };
+
+  proto.prop = function (name, value) {
+    if (value === undefined) {
+      const el = this.elements[0];
+      return el ? el[name] : undefined;
+    }
+    return this.each(function () {
+      this[name] = value;
+    });
+  };
+
+  // ==================== 样式操作 ====================
+  proto.css = function (prop, value) {
+    // 批量设置
+    if (isPlainObject(prop)) {
+      const styles = prop;
+      return this.each(function () {
+        const st = this.style;
+        for (const key in styles) {
+          if (Object.prototype.hasOwnProperty.call(styles, key)) {
+            st[key] = styles[key];
+          }
+        }
+      });
+    }
+    // 获取（计算样式）
+    if (value === undefined) {
+      const el = this.elements[0];
+      if (!el) return undefined;
+      const computed = global.getComputedStyle(el);
+      return computed[prop] || el.style[prop];
+    }
+    // 设置
+    return this.each(function () {
+      this.style[prop] = value;
+    });
+  };
+
+  // ==================== 内容操作 ====================
+  proto.text = function (content) {
+    if (content === undefined) {
+      const els = this.elements;
+      let result = '';
+      for (let i = 0, len = els.length; i < len; i++) {
+        result += els[i].textContent;
+      }
+      return result;
+    }
+    return this.each(function () {
+      this.textContent = content;
+    });
+  };
+
+  proto.html = function (content) {
+    if (content === undefined) {
+      const el = this.elements[0];
+      return el ? el.innerHTML : undefined;
+    }
+    return this.each(function () {
+      this.innerHTML = content;
+    });
+  };
+
+  proto.val = function (value) {
+    if (value === undefined) {
+      const el = this.elements[0];
+      return el ? el.value : undefined;
+    }
+    return this.each(function () {
+      this.value = value;
+    });
+  };
+
+  // ==================== 显示/隐藏 ====================
+  proto.hide = function () {
+    return this.each(function () {
+      this.style.display = 'none';
+    });
+  };
+
+  proto.show = function () {
+    return this.each(function () {
+      if (this.style.display === 'none') {
+        this.style.display = '';
+      }
+    });
+  };
+
+  proto.toggle = function () {
+    return this.each(function () {
+      this.style.display = this.style.display === 'none' ? '' : 'none';
+    });
+  };
+
+  // ==================== 插入操作 ====================
+  // 解析内容为节点数组（缓存模板容器）
+  let _tempContainer = null;
+  function parseContent(content) {
+    if (!content) return [];
+    if (content instanceof One) return content.elements.slice();
+    if (isNode(content)) return [content];
+    if (isString(content)) {
+      if (!_tempContainer) _tempContainer = doc.createElement('div');
+      _tempContainer.innerHTML = content.trim();
+      return Array.prototype.slice.call(_tempContainer.childNodes);
+    }
+    if (isArrayLike(content)) return Array.prototype.slice.call(content);
+    return [];
+  }
+
+  proto._insert = function (content, method) {
+    const nodes = parseContent(content);
+    if (!nodes.length) return this;
+
+    return this.each(function () {
+      const target = this;
+      for (let i = 0, len = nodes.length; i < len; i++) {
+        // 多个目标时克隆节点，避免移动
+        const node = len > 1 || this !== target ? nodes[i].cloneNode(true) : nodes[i];
+        target[method](node);
+      }
+    });
+  };
+
+  proto.append = function (content) {
+    return this._insert(content, 'appendChild');
+  };
+
+  proto.prepend = function (content) {
+    return this._insert(content, 'insertBefore');
+  };
+
+  proto.before = function (content) {
+    const nodes = parseContent(content);
+    if (!nodes.length) return this;
+    return this.each(function () {
+      const parent = this.parentNode;
+      if (!parent) return;
+      for (let i = 0, len = nodes.length; i < len; i++) {
+        parent.insertBefore(nodes[i].cloneNode(true), this);
+      }
+    });
+  };
+
+  proto.after = function (content) {
+    const nodes = parseContent(content);
+    if (!nodes.length) return this;
+    return this.each(function () {
+      const parent = this.parentNode;
+      if (!parent) return;
+      const next = this.nextSibling;
+      for (let i = 0, len = nodes.length; i < len; i++) {
+        parent.insertBefore(nodes[i].cloneNode(true), next);
+      }
+    });
+  };
+
+  proto.remove = function () {
+    return this.each(function () {
+      if (this.parentNode) this.parentNode.removeChild(this);
+    });
+  };
+
+  proto.empty = function () {
+    return this.each(function () {
+      while (this.firstChild) this.removeChild(this.firstChild);
+    });
+  };
+
+  // ==================== 事件操作 ====================
+  proto.on = function (event, selector, handler) {
+    if (isFunction(selector)) {
+      handler = selector;
+      selector = null;
+    }
+    if (!isFunction(handler)) return this;
+
+    const events = event.split(RE_WHITESPACE);
+
+    return this.each(function () {
+      const element = this;
+
+      // 获取或初始化该元素的事件存储
+      let store = eventStore.get(element);
+      if (!store) {
+        store = {};
+        eventStore.set(element, store);
+      }
+
+      for (let e = 0; e < events.length; e++) {
+        const evtName = events[e];
+        if (!evtName) continue;
+
+        // 每个事件名对应一个统一的监听器
+        if (!store[evtName]) {
+          store[evtName] = { handlers: [], native: null };
+
+          store[evtName].native = function (e) {
+            const handlers = store[evtName].handlers;
+            for (let i = 0; i < handlers.length; i++) {
+              const item = handlers[i];
+              if (item.selector) {
+                const matched = e.target.closest(item.selector);
+                if (matched && element.contains(matched)) {
+                  item.handler.call(matched, e, matched);
+                }
+              } else {
+                item.handler.call(element, e);
+              }
+            }
+          };
+
+          element.addEventListener(evtName, store[evtName].native, false);
+        }
+
+        store[evtName].handlers.push({ handler, selector });
+      }
+    });
+  };
+
+  proto.off = function (event, handler) {
+    const events = event ? event.split(RE_WHITESPACE) : null;
+
+    return this.each(function () {
+      const element = this;
+      const store = eventStore.get(element);
+      if (!store) return;
+
+      const evtNames = events || Object.keys(store);
+
+      for (let i = 0; i < evtNames.length; i++) {
+        const evtName = evtNames[i];
+        const entry = store[evtName];
+        if (!entry) continue;
+
+        if (!handler) {
+          // 移除该事件所有监听
+          entry.handlers = [];
+        } else {
+          // 移除指定 handler
+          entry.handlers = entry.handlers.filter(function (item) {
+            return item.handler !== handler;
+          });
+        }
+
+        // 没有 handler 了，移除原生监听
+        if (entry.handlers.length === 0) {
+          element.removeEventListener(evtName, entry.native, false);
+          delete store[evtName];
+        }
+      }
+    });
+  };
+
+  proto.once = function (event, handler) {
+    const self = this;
+    function wrapper(e) {
+      handler.call(this, e);
+      self.off(event, wrapper);
+    }
+    return this.on(event, wrapper);
+  };
+
+  proto.trigger = function (event, detail) {
+    const evt = new CustomEvent(event, {
+      bubbles: true,
+      cancelable: true,
+      detail: detail
+    });
+    return this.each(function () {
+      this.dispatchEvent(evt);
+    });
+  };
+
+  // ==================== 遍历/查找 ====================
+  proto.find = function (selector) {
+    const result = new One();
+    const collected = [];
+    const seen = new Set();
+
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      const found = this.elements[i].querySelectorAll(selector);
+      for (let j = 0, flen = found.length; j < flen; j++) {
+        if (!seen.has(found[j])) {
+          seen.add(found[j]);
+          collected.push(found[j]);
+        }
+      }
+    }
+    return result._setElements(collected);
+  };
+
+  proto.filter = function (callback) {
+    const result = new One();
+    return result._setElements(Array.prototype.filter.call(this.elements, callback));
+  };
+
+  proto.map = function (callback) {
+    return Array.prototype.map.call(this.elements, callback);
+  };
+
+  proto.parent = function () {
+    const result = new One();
+    const collected = [];
+    const seen = new Set();
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      const p = this.elements[i].parentNode;
+      if (p && p.nodeType === 1 && !seen.has(p)) {
+        seen.add(p);
+        collected.push(p);
+      }
+    }
+    return result._setElements(collected);
+  };
+
+  proto.children = function () {
+    const result = new One();
+    const collected = [];
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      const c = this.elements[i].children;
+      for (let j = 0, clen = c.length; j < clen; j++) {
+        collected.push(c[j]);
+      }
+    }
+    return result._setElements(collected);
+  };
+
+  proto.next = function () {
+    const result = new One();
+    const collected = [];
+    const seen = new Set();
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      const n = this.elements[i].nextElementSibling;
+      if (n && !seen.has(n)) {
+        seen.add(n);
+        collected.push(n);
+      }
+    }
+    return result._setElements(collected);
+  };
+
+  proto.prev = function () {
+    const result = new One();
+    const collected = [];
+    const seen = new Set();
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      const p = this.elements[i].previousElementSibling;
+      if (p && !seen.has(p)) {
+        seen.add(p);
+        collected.push(p);
+      }
+    }
+    return result._setElements(collected);
+  };
+
+  proto.index = function (element) {
+    if (element === undefined) {
+      const first = this.elements[0];
+      if (!first || !first.parentNode) return -1;
+      return Array.prototype.indexOf.call(first.parentNode.children, first);
+    }
+    if (element instanceof One) element = element.elements[0];
+    return this.elements.indexOf(element);
+  };
+
+  proto.is = function (selector) {
+    for (let i = 0, len = this.elements.length; i < len; i++) {
+      if (this.elements[i].matches(selector)) return true;
+    }
+    return false;
+  };
+
+  // ==================== 静态方法 ====================
   One.ready = function (callback) {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', callback);
+    if (doc.readyState === 'loading') {
+      doc.addEventListener('DOMContentLoaded', function handler() {
+        doc.removeEventListener('DOMContentLoaded', handler);
+        callback();
+      });
     } else {
       callback();
     }
   };
 
-  // 静态方法：创建元素
-  One.createElement = function (tagName, attrs) {
-    const el = document.createElement(tagName);
+  One.createElement = function (tagName, attrs, children) {
+    const el = doc.createElement(tagName);
     if (attrs) {
       for (const key in attrs) {
-        if (attrs.hasOwnProperty(key)) {
-          if (key === 'class') {
-            el.className = attrs[key];
-          } else if (key === 'style' && typeof attrs[key] === 'object') {
-            for (const prop in attrs[key]) {
-              el.style[prop] = attrs[key][prop];
-            }
-          } else {
-            el.setAttribute(key, attrs[key]);
+        if (!Object.prototype.hasOwnProperty.call(attrs, key)) continue;
+        const val = attrs[key];
+        if (key === 'class' || key === 'className') {
+          el.className = val;
+        } else if (key === 'style' && isPlainObject(val)) {
+          for (const p in val) {
+            if (Object.prototype.hasOwnProperty.call(val, p)) el.style[p] = val[p];
           }
+        } else if (key === 'dataset' && isPlainObject(val)) {
+          for (const d in val) {
+            if (Object.prototype.hasOwnProperty.call(val, d)) el.dataset[d] = val[d];
+          }
+        } else if (key.indexOf('on') === 0 && isFunction(val)) {
+          el.addEventListener(key.slice(2).toLowerCase(), val);
+        } else {
+          el.setAttribute(key, val);
         }
+      }
+    }
+    if (children) {
+      const nodes = parseContent(children);
+      for (let i = 0, len = nodes.length; i < len; i++) {
+        el.appendChild(nodes[i]);
       }
     }
     return new One(el);
   };
 
-  // 静态方法：发送 AJAX 请求（简单封装）
+  // 轻量 AJAX（带超时、Promise 支持）
   One.ajax = function (options) {
-    const xhr = new XMLHttpRequest();
-    const method = (options.method || 'GET').toUpperCase();
-    const url = options.url;
-    const async = options.async !== false;
+    const opts = options || {};
+    const method = (opts.method || 'GET').toUpperCase();
+    const async = opts.async !== false;
 
-    xhr.open(method, url, async);
+    return new Promise(function (resolve, reject) {
+      const xhr = new XMLHttpRequest();
+      let url = opts.url;
 
-    if (options.headers) {
-      for (const key in options.headers) {
-        if (options.headers.hasOwnProperty(key)) {
-          xhr.setRequestHeader(key, options.headers[key]);
-        }
-      }
-    }
+      xhr.open(method, url, async);
 
-    xhr.onload = function () {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        let response = xhr.responseText;
-        if (options.dataType === 'json') {
-          try {
-            response = JSON.parse(response);
-          } catch (e) {
-            if (options.error) options.error(xhr, 'parsererror', e);
-            return;
+      if (opts.timeout) xhr.timeout = opts.timeout;
+
+      // 设置请求头
+      if (opts.headers) {
+        for (const key in opts.headers) {
+          if (Object.prototype.hasOwnProperty.call(opts.headers, key)) {
+            xhr.setRequestHeader(key, opts.headers[key]);
           }
         }
-        if (options.success) options.success(response, xhr);
-      } else {
-        if (options.error) options.error(xhr, xhr.statusText, xhr);
       }
-      if (options.complete) options.complete(xhr);
-    };
 
-    xhr.onerror = function () {
-      if (options.error) options.error(xhr, 'error', xhr);
-      if (options.complete) options.complete(xhr);
-    };
-
-    let data = options.data;
-    if (data && method === 'GET') {
-      const params = [];
-      for (const key in data) {
-        if (data.hasOwnProperty(key)) {
-          params.push(encodeURIComponent(key) + '=' + encodeURIComponent(data[key]));
+      // 处理 GET 参数
+      let data = opts.data;
+      if (data && method === 'GET') {
+        const params = [];
+        for (const key in data) {
+          if (Object.prototype.hasOwnProperty.call(data, key)) {
+            params.push(encodeURIComponent(key) + '=' + encodeURIComponent(data[key]));
+          }
         }
+        if (params.length) {
+          url += (url.indexOf('?') === -1 ? '?' : '&') + params.join('&');
+        }
+        data = null;
+      } else if (data && isPlainObject(data)) {
+        data = JSON.stringify(data);
+        xhr.setRequestHeader('Content-Type', 'application/json');
       }
-      if (params.length) {
-        url += (url.indexOf('?') === -1 ? '?' : '&') + params.join('&');
-      }
-      data = null;
-    } else if (data && typeof data === 'object' && !(data instanceof FormData)) {
-      data = JSON.stringify(data);
-      xhr.setRequestHeader('Content-Type', 'application/json');
-    }
 
-    xhr.send(data || null);
-    return xhr;
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          let response = xhr.responseText;
+          if (opts.dataType === 'json') {
+            try {
+              response = JSON.parse(response);
+            } catch (e) {
+              reject(new Error('JSON parse error'));
+              return;
+            }
+          }
+          resolve(response);
+        } else {
+          reject(new Error('HTTP ' + xhr.status + ': ' + xhr.statusText));
+        }
+      };
+
+      xhr.onerror = function () {
+        reject(new Error('Network error'));
+      };
+
+      xhr.ontimeout = function () {
+        reject(new Error('Request timeout'));
+      };
+
+      xhr.send(data || null);
+    });
   };
 
-  // 暴露到全局
-  global.one = global.$ = function (selector, context) {
+  // ==================== 全局暴露 ====================
+  function $(selector, context) {
     return new One(selector, context);
-  };
+  }
 
-  // 挂载静态方法
-  global.one.ready = One.ready;
-  global.one.createElement = One.createElement;
-  global.one.ajax = One.ajax;
-  global.one.One = One;
+  $.One = One;
+  $.ready = One.ready;
+  $.createElement = One.createElement;
+  $.ajax = One.ajax;
+
+  global.one = global.$ = $;
 
 })(typeof window !== 'undefined' ? window : this);
